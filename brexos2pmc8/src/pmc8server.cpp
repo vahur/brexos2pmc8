@@ -12,25 +12,23 @@
 #define BR2ES_STEP_RATIO (48.0 / 38.0)
 
 struct Axis {
-    unsigned m_rate;
     unsigned m_direction;
     int m_target;
     int m_offset;
 
-    Axis(): m_rate(0), m_direction(0), m_target(0), m_offset(0) {
+    Axis(): m_direction(0), m_target(0), m_offset(0) {
     }
 };
 
-class Pm8Server {
+class Pmc8Server {
     int m_serverSocket;
     Brexos2Direct& m_mount;
     Axis m_axes[2];
-    unsigned m_precisionTrackingRate;
 public:
-    Pm8Server(Brexos2Direct& mount): m_serverSocket(-1), m_mount(mount), m_precisionTrackingRate(0) {
+    Pmc8Server(Brexos2Direct& mount): m_serverSocket(-1), m_mount(mount) {
     }
 
-    ~Pm8Server() {
+    ~Pmc8Server() {
         if (m_serverSocket != -1) {
             close(m_serverSocket);
         }
@@ -40,7 +38,7 @@ public:
         m_serverSocket = socket(AF_INET, SOCK_STREAM, 0);
 
         if (m_serverSocket == -1) {
-            fputs("Cannot create PM8 socket", stderr);
+            fputs("Cannot create PMC8 socket", stderr);
             return -1;
         }
 
@@ -94,7 +92,7 @@ private:
 
             response = buf;
             responseLen = 0;
-            printf("%.*s\n", nread, buf);
+            dprintf("%.*s\n", nread, buf);
 
             if (buf[0] != 'E' || buf[1] != 'S' || buf[nread - 1] != '!') continue;
 
@@ -176,7 +174,7 @@ private:
                             if (nread == 10) {
                                 int axis = buf[4] - '0';
                                 unsigned rate = parseUInt((uint8_t *)(buf + 5), 4);
-                                setAxisTrackingRate(axis, rate);
+                                setAxisSlewRate(axis, rate);
                                 buf[2] = 'G';
                                 responseLen = 10;
                             }
@@ -200,7 +198,7 @@ private:
                     break;
             }
 
-            printf("%.*s\n\n", responseLen, response);
+            dprintf("%.*s\n\n", responseLen, response);
             if (!fd.writeFully(response, responseLen)) break;
         }
 
@@ -228,12 +226,11 @@ private:
 
     void getAxisCurrentRate(int axis, char *response, int responseMaxLen, int *responseLen) {
         if (!validateAxisIndex(axis)) return;
-
-        unsigned rate;
+        int rate;
 
         if (m_mount.getAxisRate(axis, rate)) {
-            rate = round(rate * BR2ES_STEP_RATIO);
-            *responseLen = snprintf(response, responseMaxLen, "ESGr%d%04X!", axis, rate);
+            rate *= BR2ES_STEP_RATIO;
+            *responseLen = snprintf(response, responseMaxLen, "ESGr%d%04X!", axis, rate < 0 ? -rate : rate);
         }
     }
 
@@ -250,8 +247,8 @@ private:
         uint8_t status;
 
         if (m_mount.inquiry(axis, status, count)) {
-            int pm8count = count * BR2ES_STEP_RATIO;
-            m_axes[axis].m_offset = pos - pm8count;
+            int pmc8count = count * BR2ES_STEP_RATIO;
+            m_axes[axis].m_offset = pos - pmc8count;
         }
     }
 
@@ -259,45 +256,29 @@ private:
         dprintf("setPrecisionTrackingRate: %04X\n", rate);
         unsigned char buf[16];
 
-        unsigned slewRate = round(rate / 25.0 / BR2ES_STEP_RATIO * (5.0 / 38.0));
-        dprintf("Slew rate: %u\n", slewRate);
+        int trackingRate = round(rate / 25.0 / BR2ES_STEP_RATIO * (5.0 / 38.0));
+        dprintf("Tracking rate: %d\n", trackingRate);
 
-        if (slewRate < 10) {
-            m_mount.slew(1, 1, 0);  // Stop DEC
-            m_mount.slew(0, 1, slewRate);  // Slew RA
-            m_precisionTrackingRate = slewRate;
+        if (trackingRate >= 0 && trackingRate < 10) {
+            m_mount.slew(1, 0);  // Stop DEC
+            m_mount.track(0, trackingRate);  // Track RA
         }
     }
 
-    void setAxisTrackingRate(int axis, unsigned rate) {
+    void setAxisSlewRate(int axis, unsigned rate) {
         if (axis < 0 || axis > 1) {
             return;
         }
 
         int slewRate = round(rate / BR2ES_STEP_RATIO * (5.0 / 38.0));
-        int direction = m_axes[axis].m_direction;
-        dprintf("Axis: %d, slew rate: %u\n", axis, slewRate);
 
-        if (axis == 0) {
-            if (direction) {
-                slewRate += m_precisionTrackingRate;
-            } else {
-                slewRate -= m_precisionTrackingRate;
-
-                if (slewRate < 0) {
-                    direction = 1 - direction;
-                    slewRate = -slewRate;
-                }
-            }
+        if (slewRate > 4000) {
+            slewRate = 4000;
         }
 
-        if (slewRate > 4700) {
-            slewRate = 4700;
-        }
-
-        dprintf("Axis: %d, final slew rate: %u\n", axis, slewRate);
-        m_mount.slew(axis, direction, slewRate);
-        m_axes[axis].m_rate = rate;
+        if (!m_axes[axis].m_direction) slewRate = -slewRate;
+        dprintf("Axis: %d, slew rate: %d\n", axis, slewRate);
+        m_mount.slew(axis, slewRate);
     }
 
     void goTo(int axis, int target) {

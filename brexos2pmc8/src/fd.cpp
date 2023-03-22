@@ -17,7 +17,7 @@ public:
 
     ~FileDescriptor() {
         if (m_fd != -1) {
-            close(m_fd);
+            ::close(m_fd);
         }
     }
 
@@ -51,9 +51,14 @@ public:
 
         return numReadTotal;
     }
-    
+
     void set(int fd) {
         m_fd = fd;
+    }
+
+    void close() {
+        ::close(m_fd);
+        m_fd = -1;
     }
 
     bool writeFully(const void *data, ssize_t len) {

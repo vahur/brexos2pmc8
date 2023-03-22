@@ -25,8 +25,8 @@ bool validateDirection(unsigned dir) {
     return true;
 }
 
-bool validateRate(unsigned rate) {
-    if (rate > 5000) {
+bool validateRate(int rate) {
+    if (rate < -5000 || rate > 5000) {
         printf("Invalid rate: %u\n", rate);
         return false;
     }
@@ -74,14 +74,14 @@ int main(int argc, char **argv) {
     char *prevcmdline = NULL;
     char cmd[16];
     unsigned axis;
-    unsigned param1;
+    int param1;
     unsigned param2;
 
     while ((cmdline = readline("brexos2>")) != NULL) {
         bool result = true;
         axis = 0;
         param1 = 0;
-        sscanf(cmdline, "%15s %u %u %u", cmd, &axis, &param1, &param2);
+        sscanf(cmdline, "%15s %u %d %u", cmd, &axis, &param1, &param2);
 
         if (strcmp(cmd, "quit") == 0) {
             break;
@@ -103,9 +103,12 @@ int main(int argc, char **argv) {
         else if (strcmp(cmd, "disable") == 0) {
             result = mount.enableMotors(false);
         }
+        else if (strcmp(cmd, "print_axes") == 0) {
+            mount.printAxes();
+        }
         else if (strcmp(cmd, "slew") == 0) {
-            if (validateAxis(axis) && validateDirection(param1) && validateRate(param2)) {
-                result = mount.slew(axis, param1, param2);
+            if (validateAxis(axis) && validateRate(param1)) {
+                result = mount.slew(axis, param1);
             } 
         }
         else if (strcmp(cmd, "mslew") == 0) {

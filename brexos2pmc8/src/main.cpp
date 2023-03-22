@@ -2,7 +2,7 @@
 #include "debug.cpp"
 #include "fd.cpp"
 #include "brexos2.cpp"
-#include "pm8server.cpp"
+#include "pmc8server.cpp"
 
 int main(int argc, char **argv) {
     Brexos2Direct mount;
@@ -13,7 +13,7 @@ int main(int argc, char **argv) {
         return exitCode;
     }
 
-    Pm8Server server(mount);
+    Pmc8Server server(mount);
     int result = 1;
 
     if (server.init(8888)) {

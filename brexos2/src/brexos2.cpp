@@ -1,1 +1,1 @@
-../../brexos2pm8/src/brexos2.cpp
+../../brexos2pmc8/src/brexos2.cpp
