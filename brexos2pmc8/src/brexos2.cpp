@@ -204,7 +204,7 @@ class Brexos2Direct {
             }
 
             // No slewing during goto
-            if (!(axis.m_status & BREXOS2_AXIS_STATUS_SLEWING)) break;
+            if (rate != 0 && !(axis.m_status & BREXOS2_AXIS_STATUS_SLEWING)) break;
 
             if (rate <= -BREXOS2_SLEW_RAMP_THRESHOLD_RATE) {
                 rate = -BREXOS2_MAX_SLEW_RATE;
