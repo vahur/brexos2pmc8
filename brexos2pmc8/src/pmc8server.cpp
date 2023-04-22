@@ -229,7 +229,7 @@ private:
         int rate;
 
         if (m_mount.getAxisRate(axis, rate)) {
-            rate *= BR2ES_STEP_RATIO;
+            rate = convertRateBr2Es(rate);
             *responseLen = snprintf(response, responseMaxLen, "ESGr%d%04X!", axis, rate < 0 ? -rate : rate);
         }
     }
@@ -256,7 +256,7 @@ private:
         dprintf("setPrecisionTrackingRate: %04X\n", rate);
         unsigned char buf[16];
 
-        int trackingRate = round(rate / 25.0 / BR2ES_STEP_RATIO * (5.0 / 38.0));
+        int trackingRate = convertRateEs2Br(rate / 25.0);
         dprintf("Tracking rate: %d\n", trackingRate);
 
         if (trackingRate >= 0 && trackingRate < 10) {
@@ -270,7 +270,7 @@ private:
             return;
         }
 
-        int slewRate = round(rate / BR2ES_STEP_RATIO * (5.0 / 38.0));
+        int slewRate = convertRateEs2Br(rate);
 
         if (slewRate > 4000) {
             slewRate = 4000;
@@ -279,6 +279,14 @@ private:
         if (!m_axes[axis].m_direction) slewRate = -slewRate;
         dprintf("Axis: %d, slew rate: %d\n", axis, slewRate);
         m_mount.slew(axis, slewRate);
+    }
+
+    int convertRateEs2Br(double esRate) {
+        return round(esRate / BR2ES_STEP_RATIO * (5.0 / 38.0));
+    }
+
+    int convertRateBr2Es(int brRate) {
+        return round(brRate * (38.0 / 5.0) * BR2ES_STEP_RATIO);
     }
 
     void goTo(int axis, int target) {

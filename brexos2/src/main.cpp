@@ -122,15 +122,20 @@ int main(int argc, char **argv) {
             }
         }
         else if (strcmp(cmd, "cmd10") == 0) {
-            unsigned arg;
-            result = mount.cmd10(arg);
+            unsigned cmd10retval;
+
+            if (validateAxis(axis)) {
+                result = mount.cmd10(axis, cmd10retval);
+            }
 
             if (result) {
-                printf("%04x\n", arg);
+                printf("%04x\n", cmd10retval);
             }
         }
         else if (strcmp(cmd, "cmd0f") == 0) {
-            result = mount.cmd0f(axis);
+            if (validateAxis(axis)) {
+                result = mount.cmd0f(axis, param1);
+            }
         }
 
         if (!result) {

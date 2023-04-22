@@ -1,4 +1,6 @@
 #pragma once
+#include <cstdio>
+#include <ctime>
 #include <termios.h>
 #include <fcntl.h>
 #include <stdint.h>
@@ -22,7 +24,7 @@
 
 #define BREXOS2_SLEW_RAMP_THRESHOLD_RATE 1600
 #define BREXOS2_MAX_SLEW_RATE BREXOS2_MAX_GOTO_RATE
-#define BREXOS2_SLEW_RAMP_STEP_RATE 200
+#define BREXOS2_SLEW_RAMP_STEP 250
 
 class Brexos2Direct {
     struct Axis {
@@ -36,9 +38,11 @@ class Brexos2Direct {
         int m_gotoStart;
         int m_gotoTarget;
         int m_gotoRate;
+        int m_backlashComp;
 
         Axis(): m_rate(0), m_slewRate(0), m_slewRampActive(false), m_trackingRate(0), m_currentTrackingRate(0),
-                m_position(0), m_status(BREXOS2_AXIS_STATUS_DISABLED), m_gotoStart(0), m_gotoTarget(0), m_gotoRate(0) {
+                m_position(0), m_status(BREXOS2_AXIS_STATUS_DISABLED), m_gotoStart(0), m_gotoTarget(0), m_gotoRate(0),
+                m_backlashComp(0) {
         }
 
         void print(uint8_t index) {
@@ -54,7 +58,8 @@ class Brexos2Direct {
                 "Status:        %02X\n"
                 "Goto start:    %08X\n"
                 "Goto target:   %08X\n"
-                "Goto rate:     %08X\n\n",
+                "Goto rate:     %08X\n"
+                "Backlash comp: %d\n\n",
                 index,
                 m_rate,
                 m_slewRate,
@@ -65,8 +70,13 @@ class Brexos2Direct {
                 m_status,
                 m_gotoStart,
                 m_gotoTarget,
-                m_gotoRate
+                m_gotoRate,
+                m_backlashComp
             );
+        }
+
+        uint8_t getDirection() {
+            return m_status & BREXOS2_AXIS_STATUS_DIRECTION ? 0 : 1;
         }
     };
 
@@ -80,6 +90,7 @@ class Brexos2Direct {
     int m_tickCount;
  public:
     Brexos2Direct(): m_managerThreadCreateStatus(-1), m_managerMutexCreateStatus(-1), m_axesIdleCount(0), m_tickCount(0) {
+        m_axes[1].m_backlashComp = 100; // Speed 100 (20xsidereal) for 100ms
     }
 
     ~Brexos2Direct() {
@@ -195,36 +206,49 @@ class Brexos2Direct {
             // No slewing during goto
             if (!(axis.m_status & BREXOS2_AXIS_STATUS_SLEWING)) break;
 
-            if (axis.m_trackingRate == 0
-                    || axis.m_slewRampActive
-                    || rate > BREXOS2_MAX_GUIDING_PULSE_RATE
-                    || rate < -BREXOS2_MAX_GUIDING_PULSE_RATE) {
+            if (rate <= -BREXOS2_SLEW_RAMP_THRESHOLD_RATE) {
+                rate = -BREXOS2_MAX_SLEW_RATE;
+            } else if (rate >= BREXOS2_SLEW_RAMP_THRESHOLD_RATE) {
+                rate = BREXOS2_MAX_SLEW_RATE;
+            } else if (!axis.m_slewRampActive
+                    && axis.m_rate > -BREXOS2_SLEW_RAMP_THRESHOLD_RATE
+                    && axis.m_rate < BREXOS2_SLEW_RAMP_THRESHOLD_RATE) {
 
-                if (rate <= -BREXOS2_SLEW_RAMP_THRESHOLD_RATE) {
-                    rate = -BREXOS2_MAX_SLEW_RATE;
-                } else if (rate >= BREXOS2_SLEW_RAMP_THRESHOLD_RATE) {
-                    rate = BREXOS2_MAX_SLEW_RATE;
-                } else if (!axis.m_slewRampActive
-                        && axis.m_rate > -BREXOS2_SLEW_RAMP_THRESHOLD_RATE
-                        && axis.m_rate < BREXOS2_SLEW_RAMP_THRESHOLD_RATE) {
-                    // Normal slew
-                    result = cmdSlew(axisIndex, rate);
-                    break;
+                int newRate = rate;
+
+                if (axis.m_trackingRate != 0
+                        && rate > -BREXOS2_MAX_GUIDING_PULSE_RATE
+                        && rate < BREXOS2_MAX_GUIDING_PULSE_RATE) {
+                    // Tracking is on and got guiding pulse
+                    newRate += axis.m_currentTrackingRate;
+
+                    if (newRate < 0) {
+                        newRate = 0;
+                    }
                 }
 
-                axis.m_slewRampActive = true;
-                result = true;
+                // Normal slew
+                uint8_t currentDirection = axis.getDirection();
+
+                if (newRate != 0 && axis.m_backlashComp != 0) {
+                    uint8_t newDirection = newRate > 0 ? 1 : 0;
+
+                    if (newDirection != currentDirection) {
+                        // Backlash compensation
+                        dprintf("Backlash compensation: %d\n", axis.m_backlashComp);
+                        cmdSlew(axisIndex, newDirection ? axis.m_backlashComp : -axis.m_backlashComp);
+
+                        timespec sleepInterval = { 0, 100 /* MS */ * 1000000L };
+                        nanosleep(&sleepInterval, NULL);
+                    }
+                }
+
+                result = cmdSlew(axisIndex, newRate);
                 break;
             }
 
-            // Tracking is on and got guiding pulse
-            int newRate = axis.m_currentTrackingRate + rate;
-
-            if (newRate < 0) {
-                newRate = 0;
-            }
-
-            result = cmdSlew(axisIndex, newRate);
+            axis.m_slewRampActive = true;
+            result = true;
         } while (0);
 
         m_axes[axisIndex].m_slewRate = rate;
@@ -293,11 +317,11 @@ class Brexos2Direct {
         return result;
     }
 
-    bool cmd0f(unsigned param) {
+    bool cmd0f(uint8_t axisIndex, unsigned param) {
         bool result = false;
 
         if (pthread_mutex_lock(&m_managerMutex) == 0) {
-            const uint8_t cmd[] = { 0x55, 0xaa, 0x01, 0x03, 0x0f, (uint8_t) (param >> 8), (uint8_t) param };
+            const uint8_t cmd[] = { 0x55, 0xaa, 0x01, 0x03, (uint8_t) (axisIndex << 5 | 0x0f), (uint8_t) (param >> 8), (uint8_t) param };
             uint8_t buf[16];
             result = writeCommand(cmd, sizeof(cmd), buf, sizeof(buf));
             pthread_mutex_unlock(&m_managerMutex);
@@ -306,17 +330,17 @@ class Brexos2Direct {
         return result;
     }
 
-    bool cmd10(unsigned &param) {
+    bool cmd10(uint8_t axisIndex, unsigned &retval) {
         bool result = false;
 
         if (pthread_mutex_lock(&m_managerMutex) == 0) {
-            const uint8_t cmd[] = { 0x55, 0xaa, 0x01, 0x01, 0x10 };
+            const uint8_t cmd[] = { 0x55, 0xaa, 0x01, 0x01, (uint8_t) (axisIndex << 5 | 0x10) };
             uint8_t buf[16];
 
             if (writeCommand(cmd, sizeof(cmd), buf, sizeof(buf))) {
                 if (buf[3] == 3) {
-                    param = buf[5];
-                    param = (param << 8) | buf[6];
+                    retval = buf[5];
+                    retval = (retval << 8) | buf[6];
                     result = true;
                 }
             }
@@ -406,10 +430,10 @@ private:
                 int rate = axis.m_rate;
 
                 if (rate < axis.m_slewRate) {
-                    rate += BREXOS2_SLEW_RAMP_STEP_RATE;
+                    rate += BREXOS2_SLEW_RAMP_STEP;
                     if (rate > axis.m_slewRate) rate = axis.m_slewRate;
                 } else if (rate > axis.m_slewRate) {
-                    rate -= BREXOS2_SLEW_RAMP_STEP_RATE;
+                    rate -= BREXOS2_SLEW_RAMP_STEP;
                     if (rate < axis.m_slewRate) rate = axis.m_slewRate;
                 }
 
@@ -419,24 +443,23 @@ private:
                     dprintf("Slew ramp: status=%02X, rate=%d\n", axis.m_status, rate);
                     cmdSlew(axisIndex, rate);
                 }
-            } else if (axisIndex == BREXOS2_AXIS_INDEX_RA) {
-                if (axis.m_trackingRate != 0) {
-                    // Modulate tracking rate to slow it down a bit
-                    int newTrackingRate = (m_tickCount % 6) == 0 ? axis.m_trackingRate - 1 : axis.m_trackingRate;
+            } else if (axis.m_trackingRate != 0) {
+                // Modulate tracking rate to slow it down a bit
+                /*int newTrackingRate = (m_tickCount % 24) == 0 ? axis.m_trackingRate - 1 : axis.m_trackingRate;*/
+                int newTrackingRate = axis.m_trackingRate;
 
-                    if (newTrackingRate < 0) {
-                        newTrackingRate = 0;
-                    }
+                if (newTrackingRate < 0) {
+                    newTrackingRate = 0;
+                }
 
-                    axis.m_currentTrackingRate = newTrackingRate;
+                axis.m_currentTrackingRate = newTrackingRate;
 
-                    if (axis.m_slewRate > -BREXOS2_MAX_GUIDING_PULSE_RATE && axis.m_slewRate < BREXOS2_MAX_GUIDING_PULSE_RATE) {
-                        int newRate = newTrackingRate + axis.m_slewRate;
-                        if (newRate < 0) newRate = 0;
+                if (axis.m_slewRate > -BREXOS2_MAX_GUIDING_PULSE_RATE && axis.m_slewRate < BREXOS2_MAX_GUIDING_PULSE_RATE) {
+                    int newRate = newTrackingRate + axis.m_slewRate;
+                    if (newRate < 0) newRate = 0;
 
-                        if (axis.m_rate != newRate) {
-                            cmdSlew(BREXOS2_AXIS_INDEX_RA, newRate);
-                        }
+                    if (axis.m_rate != newRate) {
+                        cmdSlew(BREXOS2_AXIS_INDEX_RA, newRate);
                     }
                 }
             }
@@ -484,6 +507,7 @@ private:
         return false;
     }
 
+    /* NB! Always update axis status before calling this */
     bool cmdSlew(uint8_t axis, int rate) {
         uint8_t direction;
         unsigned rateToUse;
@@ -491,6 +515,9 @@ private:
         if (rate > 0) {
             direction = 1;
             rateToUse = rate;
+        } else if (rate == 0) {
+            direction = m_axes[axis].getDirection();
+            rateToUse = 0;
         } else {
             direction = 0;
             rateToUse = -rate;
