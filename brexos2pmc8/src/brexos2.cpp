@@ -24,7 +24,7 @@
 
 #define BREXOS2_SLEW_RAMP_THRESHOLD_RATE 1600
 #define BREXOS2_MAX_SLEW_RATE BREXOS2_MAX_GOTO_RATE
-#define BREXOS2_SLEW_RAMP_STEP 250
+#define BREXOS2_SLEW_RAMP_STEP 200
 
 class Brexos2Direct {
     struct Axis {
@@ -90,7 +90,7 @@ class Brexos2Direct {
     int m_tickCount;
  public:
     Brexos2Direct(): m_managerThreadCreateStatus(-1), m_managerMutexCreateStatus(-1), m_axesIdleCount(0), m_tickCount(0) {
-        m_axes[1].m_backlashComp = 100; // Speed 100 (20xsidereal) for 100ms
+        m_axes[1].m_backlashComp = 120; // Speed 120 (24xsidereal) for 100ms
     }
 
     ~Brexos2Direct() {

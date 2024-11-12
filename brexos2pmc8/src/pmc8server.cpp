@@ -274,6 +274,9 @@ private:
 
         if (slewRate > 4000) {
             slewRate = 4000;
+        } else if (slewRate == 3) {
+            // 0.5x sidereal guide pulse
+            slewRate = 2;
         }
 
         if (!m_axes[axis].m_direction) slewRate = -slewRate;
